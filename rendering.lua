@@ -1,6 +1,6 @@
---[[pod_format="raw",created="2024-05-22 18:18:28",modified="2024-08-28 23:16:33",revision=18317]]
+--[[pod_format="raw",created="2024-05-22 18:18:28",modified="2024-11-06 08:29:04",revision=18461]]
 local Utils = require"blade3d.utils"
-local sort = Utils.sort
+local sort = Utils.tab_sort
 
 ---@class RenderCamera
 local camera
@@ -20,20 +20,16 @@ local function perspective_points(pts)
 	-- Getting the reciprocals of a userdata is non-trivial. To do it, we
 	-- initialize an array, copy 1 to every element, and then divide that by w.
 	local inv_w = userdata("f64",pts_height)
-	inv_w:copy(1,true,0,0,1,1,1,pts_height)
-	inv_w:div(pts,true,3,0,1,4,1,pts_height)
+		:copy(1,true)
+		:div(pts,true,3,0,1,4,1,pts_height)
 	
 	-- inv_w serves two purposes. The first is so we can put the reciprocals
 	-- of w into the w column, and the second is that we can use the cheaper
 	-- multiplication for XYZ. Unfortunately, we can't do a single operation
 	-- which uses the same w three times, so we split it into XYZ.
-	pts:mul(inv_w,true,0,0,1,1,4,pts_height) -- X
-	pts:mul(inv_w,true,0,1,1,1,4,pts_height) -- Y
-	pts:mul(inv_w,true,0,2,1,1,4,pts_height) -- Z
-	
-	pts:copy(inv_w,true,0,3,1,1,4,pts_height) -- W
-	
-	return pts
+	return pts:mul(inv_w,true,0,0,1,1,4,pts_height) -- X
+		:mul(inv_w,true,0,1,1,1,4,pts_height) -- Y
+		:copy(inv_w,true,0,3,1,1,4,pts_height) -- W
 end
 
 ---Applies perspective division to a single point.
@@ -49,42 +45,45 @@ end
 ---@return table? @A new model containing every clipped triangle.
 local function clip_tris(model)
 	local pts,uvs,indices,
-		skip_tris,materials,depths =
+		skip_tris,materials,depths,lums =
 			model.pts,model.uvs,model.indices,
-			model.skip_tris,model.materials,model.depths
+			model.skip_tris,model.materials,model.depths,model.lums
 	
 	local tri_clips = {}
 	local quad_clips = {}
 	for i = 0,indices:height()-1 do
-		if not skip_tris[i] then
+		if skip_tris[i] <= 0 then
 			local i1,i2,i3 = indices:get(0,i,3)
 			local p1,p2,p3 =
-				pts:row(i1),
-				pts:row(i2),
-				pts:row(i3)
+				pts:row(i1/4),
+				pts:row(i2/4),
+				pts:row(i3/4)
 			local w1,w2,w3 = p1[3],p2[3],p3[3]
 			
 			-- The near clipping plane is the only one that's actually clipped.
 			-- Truncation is cheaper on the edges, and culling entire triangles
 			-- is cheaper than that.
 			local n1,n2,n3 =
-				p1.z > w1,
-				p2.z > w2,
-				p3.z > w3
+				p1.z < 0,
+				p2.z < 0,
+				p3.z < 0
 			
+			-- If all three vertices are behind a clipping plane, discard the
+			-- triangle.
 			if (n1 and n2 and n3)
 				or (p1.x < -w1 and p2.x < -w2 and p3.x < -w3)
 				or (p1.x >  w1 and p2.x >  w2 and p3.x >  w3)
 				or (p1.y < -w1 and p2.y < -w2 and p3.y < -w3)
 				or (p1.y >  w1 and p2.y >  w2 and p3.y >  w3)
 			then
-				skip_tris[i] = true
-			-- We know that at least one vertex is inside the frustum.
-			-- If any of them are outside the near plane, we need to clip.
+				skip_tris[i] = 1
+				-- If all vertices are in front of the near plane,
+				-- we don't need to clip.
 			elseif n1 or n2 or n3 then
+				
 				-- Instead of modifying the existing triangle, we disable this
 				-- one and provide a list of new generated ones.
-				skip_tris[i] = true
+				skip_tris[i] = 1
 				local iuv = i*3
 				
 				-- UVs are per-triangle.
@@ -111,12 +110,18 @@ local function clip_tris(model)
 				if #outside == 1 then
 					add(
 						quad_clips,
-						{inside[1],inside[2],outside[1],materials[i],depths[i]}
+						{
+							inside[1],inside[2],outside[1],
+							materials[i],depths[i],lums and lums[i]
+						}
 					)
 				else
 					add(
 						tri_clips,
-						{inside[1],outside[1],outside[2],materials[i],depths[i]}
+						{
+							inside[1],outside[1],outside[2],
+							materials[i],depths[i],lums and lums[i]
+						}
 					)
 				end
 			end
@@ -132,9 +137,10 @@ local function clip_tris(model)
 	
 	local gen_pts = userdata("f64",4,gen_vert_count)
 	local gen_uvs = userdata("f64",2,gen_tri_count*3)
-	local gen_indices = userdata("i64",3,gen_tri_count)
+	local gen_indices = userdata("i32",3,gen_tri_count)
 	local gen_materials = {}
 	local gen_depths = userdata("f64",gen_tri_count)
+	local gen_lums = lums and userdata("f64",gen_tri_count)
 	
 	-- vert_i and tri_i mutate differently for triangles and quads.
 	local vert_i = 0
@@ -154,12 +160,10 @@ local function clip_tris(model)
 		
 		-- Deltas are very useful for interpolation.
 		local diff2,diff3 = p2-p1,p3-p1
-		-- Oh yeah baby, ultra weird clip space inverse lerp math.
-		-- Frankly, I don't think I understand it myself.
-		local mul = p1.z-p1[3]
+
 		local t2,t3 =
-			mul/(diff2.z+diff2[3]),
-			mul/(diff3.z+diff3[3])
+			-p1.z/diff2.z,
+			-p1.z/diff3.z
 		
 		-- Lerp to get the vertices at the clipping plane.
 		p2,p3 = diff2*t2+p1,diff3*t3+p1
@@ -175,11 +179,15 @@ local function clip_tris(model)
 			uv2[0],uv2[1],
 			uv3[0],uv3[1]
 		)
-		gen_indices:set(0,tri_i,vert_i,vert_i+1,vert_i+2)
+		local i1 = vert_i*4
+		gen_indices:set(0,tri_i,i1,i1+4,i1+8)
 		
 		-- Copy over the extra data from the original triangle.
 		gen_materials[tri_i] = verts[4]
 		gen_depths[tri_i] = verts[5]
+		if lums then
+			gen_lums[tri_i] = verts[6]
+		end
 		
 		vert_i += 3
 		tri_i += 1
@@ -197,10 +205,9 @@ local function clip_tris(model)
 		local uv1,uv2,uv3 = v1[2],v2[2],v3[2]
 		
 		local diff1,diff2 = p1-p3,p2-p3
-		local mul = p3.z-p3[3]
 		local t1,t2 =
-			mul/(diff1.z+diff1[3]),
-			mul/(diff2.z+diff2[3])
+			-p3.z/diff1.z,
+			-p3.z/diff2.z
 		
 		-- We need to generate one extra vertex for the quad.
 		local p4 = diff2*t2+p3
@@ -224,7 +231,8 @@ local function clip_tris(model)
 			uv2[0],uv2[1],
 			uv4[0],uv4[1]
 		)
-		local i1,i2,i3,i4 = vert_i,vert_i+1,vert_i+2,vert_i+3
+		local i1 = vert_i*4
+		local i2,i3,i4 = i1+4,i1+8,i1+12
 		gen_indices:set(0,tri_i,
 			i1,i2,i3,
 			i3,i2,i4
@@ -234,6 +242,10 @@ local function clip_tris(model)
 		gen_materials[tri_i+1] = verts[4]
 		gen_depths[tri_i] = verts[5]
 		gen_depths[tri_i+1] = verts[5]
+		if lums then
+			gen_lums[tri_i] = verts[6]
+			gen_lums[tri_i+1] = verts[6]
+		end
 		
 		vert_i += 4
 		tri_i += 2
@@ -243,44 +255,41 @@ local function clip_tris(model)
 		pts = gen_pts,
 		uvs = gen_uvs,
 		indices = gen_indices,
-		skip_tris = {},
+		skip_tris = userdata("f64",gen_tri_count),
 		materials = gen_materials,
-		depths = gen_depths
+		depths = gen_depths,
+		lums = gen_lums
 	}
 end
 
 local function draw_model(model,cts_mul,cts_add,screen_height)
-	local pts,uvs,indices,
-		skip_tris,materials,depths =
+	local pts,uvs,indices,skip_tris,materials,depths,lums =
 			model.pts,model.uvs,model.indices,
-			model.skip_tris,model.materials,model.depths
+			model.skip_tris,model.materials,model.depths,
+			model.lums
 	
 	profile"Perspective"
 	pts = perspective_points(pts:copy(pts))
-	pts:mul(cts_mul,true,0,0,3,0,4,pts:height())
-	pts:add(cts_add,true,0,0,3,0,4,pts:height())
+		:mul(cts_mul,true,0,0,3,0,4,pts:height())
+		:add(cts_add,true,0,0,3,0,4,pts:height())
 	profile"Perspective"
 	
 	profile"Model iteration"
+	local unpacked_verts = userdata("f64",6,#indices)
+	pts:copy(indices,unpacked_verts,0,0,4,1,6,#indices)
+	unpacked_verts:copy(uvs,true,0,4,2,2,6,uvs:height())
+	
 	for j = 0,indices:height()-1 do
-		if not skip_tris[j] then
-			local tri_i = j*3
-			local p1,p2,p3 =
-				pts:row(indices[tri_i]),
-				pts:row(indices[tri_i+1]),
-				pts:row(indices[tri_i+2])
-			
-			local uv1,uv2,uv3 =
-				uvs:row(tri_i),
-				uvs:row(tri_i+1),
-				uvs:row(tri_i+2)
+		if skip_tris[j] <= 0 then
+			local vert_data = userdata("f64",6,3)
+				:copy(unpacked_verts,true,j*18,0,18)
 			
 			local material = materials[j]
-			local shader,properties = material.shader,material.properties
+			local props_in = setmetatable({light = lums and lums[j]},material)
 			
 			add(draw_queue,{
 				func = function()
-					shader(properties,p1,p2,p3,uv1,uv2,uv3,screen_height)
+					material.shader(props_in,vert_data,screen_height)
 				end,
 				z = depths[j]
 			})
@@ -303,9 +312,9 @@ local function draw_all()
 		local model = model_queue[i]
 		
 		
-		profile"Near clipping"
+		profile"Frustum tests"
 		local clipped_tris = clip_tris(model)
-		profile"Near clipping"
+		profile"Frustum tests"
 		
 		draw_model(model,cts_mul,cts_add,screen_height)
 		
@@ -315,14 +324,11 @@ local function draw_all()
 	end
     
 	profile"Z-sorting"
-	sort(draw_queue,"z")
+	local sorted = sort(draw_queue,"z",true)
 	profile"Z-sorting"
-	
-	profile"Draw queue execution"
-	for i = #draw_queue,1,-1 do
-		draw_queue[i].func()
+	for draw_command in sorted do
+		draw_command.func()
 	end
-	profile"Draw queue execution"
 	
 	model_queue = {}
 	draw_queue = {}
@@ -356,10 +362,12 @@ end
 ---@param model table @The model to queue.
 ---@param mat userdata @The model's transformation matrix.
 ---@param imat userdata @The inverse of the model's transformation matrix.
-local function queue_model(model,mat,imat)
+---@param ambience? number @The ambient light intensity.
+---@param light? userdata @The position of the light source.
+---@param light_intensity? number @The intensity of the light source. If not provided, the light is assumed to be directional, and the intensity is the magnitude of the light vector.
+local function queue_model(model,mat,imat,ambience,light,light_intensity)
 	profile"Backface culling"
-	local skip_tris = {}
-	local face_dists = model.face_dists
+	local face_dists,norms = model.face_dists,model.norms
 	local relative_cam_pos = camera.position:matmul3d(imat)
 	
 	-- Each face, in addition to a normal, has a length. This length is the
@@ -370,10 +378,8 @@ local function queue_model(model,mat,imat)
 	
 	-- Did you know that multiplying a matrix by a transposed vector is the same
 	-- as performing a dot product between the matrix's rows and the vector?
-	local dots = model.norms:matmul(relative_cam_pos:transpose())
-	for i = 0,#face_dists-1 do
-		skip_tris[i] = dots[i] < face_dists[i]
-	end
+	local dots = norms:matmul(relative_cam_pos:transpose())
+	local skip_tris = face_dists-dots
 	profile"Backface culling"
 	
 	local mvp = mat:matmul(camera:get_vp_matrix())
@@ -394,10 +400,34 @@ local function queue_model(model,mat,imat)
 	-- Since this distance is only used in comparisons, we can cheap out and
 	-- skip the square root.
 	local depths = userdata("f64",cam_sort_points:height())
-	depths:add(cam_sort_points,true,0,0,1,3,1,cam_sort_points:height()) -- X
-	depths:add(cam_sort_points,true,1,0,1,3,1,cam_sort_points:height()) -- Y
-	depths:add(cam_sort_points,true,2,0,1,3,1,cam_sort_points:height()) -- Z
+		:add(cam_sort_points,true,0,0,1,3,1,cam_sort_points:height()) -- X
+		:add(cam_sort_points,true,1,0,1,3,1,cam_sort_points:height()) -- Y
+		:add(cam_sort_points,true,2,0,1,3,1,cam_sort_points:height()) -- Z
 	profile"Depth determination"
+	
+	profile"Lighting"
+	local lums
+	if light then
+		-- For directional lights, the position needs to be stripped from the
+		-- inverse matrix.
+		local light_pos = light:matmul3d(
+			light_intensity and imat or imat:copy(0,false,0,12,3)
+		)
+		local light_mag = light_pos:magnitude()+0.00001
+		local illuminance = light_intensity
+			and light_intensity/(light_mag*light_mag) -- Inverse square falloff
+			or light_mag
+		
+		lums = norms:matmul((light_pos/light_mag):transpose()):max(0) -- Normal contribution
+			*illuminance -- Intensity
+		if ambience then
+			lums += ambience -- Ambient light
+		end
+	elseif ambience then
+		lums = userdata("f64",norms:height())
+			:copy(ambience,true,0,0,1,0,1,norms:height())
+	end
+	profile"Lighting"
 	
 	-- The model's data has been, and will be, aggressively mutated, so a new one
 	-- gets created to isolate side effects.
@@ -408,7 +438,8 @@ local function queue_model(model,mat,imat)
 		tex = model.tex,
 		skip_tris = skip_tris,
 		materials = model.materials,
-		depths = depths
+		depths = depths,
+		lums = lums,
 	})
 	
 	return true
@@ -421,12 +452,15 @@ end
 ---@param col integer @The color of the line.
 ---@param mat userdata @The line's transformation matrix.
 local function queue_line(p1,p2,col,mat)
-	-- This one was thrown together as a minor feature, so it still needs some
-	-- work.
-	local mvp = mat:matmul(camera:get_vp_matrix())
-	p1,p2 = p1:matmul(mvp),p2:matmul(mvp)
+	p1,p2 = p1:matmul(mat),p2:matmul(mat)
 	
-	if	   p1.z >  p1[3] or  p2.z >  p2[3]
+	local relative_cam_pos = (p1+p2)*0.5-camera.position
+	local depth = relative_cam_pos:dot(relative_cam_pos)
+	
+	local vp = camera:get_vp_matrix()
+	p1,p2 = p1:matmul(vp),p2:matmul(vp)
+	
+	if	   p1.z >  p1[3] and p2.z >  p2[3]
 		or p1.z < -p1[3] and p2.z < -p2[3]
 		or p1.x >  p1[3] and p2.x >  p2[3]
 		or p1.x < -p1[3] and p2.x < -p2[3]
@@ -434,6 +468,16 @@ local function queue_line(p1,p2,col,mat)
 		or p1.y < -p1[3] and p2.y < -p2[3]
 	then return end
 	
+	if p1.z >  p1[3] or  p2.z > p2[3] then
+		-- We'll call the point behind the camera p2.
+		if p1.z < p2.z then
+			p1, p2 = p2, p1
+		end
+		
+		local diff2 = p2-p1
+		p2 = diff2*(p1.z-p1[3])/(diff2.z+diff2[3])+p1
+	end
+
 	p1,p2 =
 		perspective_point(p1)
 			:mul(camera.cts_mul,true,0,0,3)
@@ -442,10 +486,9 @@ local function queue_line(p1,p2,col,mat)
 			:mul(camera.cts_mul,true,0,0,3)
 			:add(camera.cts_add,true,0,0,3)
 	
-	local z = (p1.z+p2.z)*0.5
 	add(draw_queue,{
 		func = function() line(p1.x,p1.y,p2.x,p2.y,col) end,
-		z = z*z -- Squared 'cause every other z is squared.
+		z = depth
 	})
 end
 

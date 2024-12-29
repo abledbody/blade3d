@@ -5,7 +5,7 @@
 
 ---@class Material
 ---@field shader Shader The shader to use for rendering.
----@field properties any The properties passed to the shader.
+---@field __index table? The properties passed to the shader.
 
 ---@alias MaterialLookup table<string,Material>
 
@@ -29,6 +29,7 @@ return function(path,material_lookup)
 	-- .pcm file indices refer to matrix rows, but flat indices are faster
 	-- and more convenient for userdata operations.
 	uv_indices *= 2
+	pt_indices *= 4
 	
 	-- Calculate the AABB and create a sphere which encompasses it.
 	-- This is used for efficient frustum culling.
@@ -78,13 +79,8 @@ return function(path,material_lookup)
 		
 		-- Transform uvs if the material uses a texture property,
 		-- because picotron uses texel coordinates, not normalized coordinates.
-		local tex
-		if type(mtl.properties) == "userdata" then
-			tex = mtl.properties
-		elseif type(mtl.properties) == "table" and mtl.properties.tex then
-			tex = mtl.properties.tex
-		end
-		if tex then
+		if mtl.__index and mtl.__index.tex then
+			local tex = get_spr(mtl.__index.tex)
 			uvs:mul(vec(tex:width(),tex:height()),true,0,i*6,2,0,2,3)
 		end
 		
@@ -92,9 +88,9 @@ return function(path,material_lookup)
 		
 		-- Truncate the points to 3 dimensions. We're not in 4D just yet.
 		local p1,p2,p3 =
-			userdata("f64",3):copy(ptm_pts,true,pt_indices[i*3  ]*4,0,3),
-			userdata("f64",3):copy(ptm_pts,true,pt_indices[i*3+1]*4,0,3),
-			userdata("f64",3):copy(ptm_pts,true,pt_indices[i*3+2]*4,0,3)
+			userdata("f64",3):copy(ptm_pts,true,pt_indices[i*3  ],0,3),
+			userdata("f64",3):copy(ptm_pts,true,pt_indices[i*3+1],0,3),
+			userdata("f64",3):copy(ptm_pts,true,pt_indices[i*3+2],0,3)
 		
 		-- pcm does not come with pre-baked normals to save space.
 		local norm = (p3-p1):cross(p2-p1)
