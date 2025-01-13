@@ -441,6 +441,100 @@ local function queue_model(model,mat,imat,ambience,light,light_intensity)
 	return true
 end
 
+---Queues a point for rendering.
+---@param p userdata @The coordinates of the point.
+---@param col integer @The color of the point.
+---@param mat userdata @The point's transformation matrix.
+local function queue_point(p,col,mat)
+	profile"Point queueing"
+	p = p:matmul(mat)
+	
+	local relative_cam_pos = p-camera.position
+	local depth = relative_cam_pos:dot(relative_cam_pos)
+	
+	p = p:matmul(camera:get_vp_matrix())
+	
+	if	   p.z >  p[3]
+		or p.z < -p[3]
+	then return end
+
+	p = perspective_point(p)
+		:mul(camera.cts_mul,true,0,0,3)
+		:add(camera.cts_add,true,0,0,3),
+	
+	add(draw_queue,{
+		func = function() pset(p.x,p.y,col) end,
+		z = depth
+	})
+	profile"Point queueing"
+end
+
+---Queues multiple points for rendering.
+---@param pts userdata @4xN userdata of point coordinates.
+---@param col integer @The color of the points.
+---@param mat userdata @The point's transformation matrix.
+---@param midpoint? userdata @The coodinate used for calculating the depth for sorting. Otherwise calculates depth per point.
+local function queue_points(pts,col,mat,midpoint)
+	profile"Point queueing"
+	local pmodel = pts:matmul(mat)
+	local ph = pmodel:height()
+	local depth = 1
+	
+	local p = pmodel:matmul(camera:get_vp_matrix())
+	
+	profile"Frustum tests"
+	for i = 0, ph-1 do
+		local pt = p:row(i)
+		
+		-- The other axes are actually not worth culling, too expensive.
+		if 	   pt.z >  pt[3]
+			or pt.z < -pt[3]  then
+			-- Yup, just get that out of the way.
+			p:set(0,i,1,0,0,1)
+		end
+	end	
+	profile"Frustum tests"
+
+	p = perspective_points(p:copy(p))
+		:mul(camera.cts_mul,true,0,0,3,0,4,ph)
+		:add(camera.cts_add,true,0,0,3,0,4,ph)
+
+	if midpoint then
+		local relative_cam_pos = midpoint-camera.position
+		depth = relative_cam_pos:dot(relative_cam_pos)
+
+		local draws = userdata("f64",3,ph)
+			:copy(p,true,0,0,2,4,3,ph)
+			:copy(col,true,0,2,1,0,3,ph)
+		
+		add(draw_queue,{
+			func = function()
+				pset(draws)
+			end,
+			z = depth
+		})
+	else
+		local relative_cam_pos = pmodel:sub(camera.position,false,0,0,3,0,4,ph)
+		relative_cam_pos:mul(relative_cam_pos,true,0,0,3,4,4,ph)
+		local depths = userdata("f64",ph) -- Sum of squares
+			:copy(relative_cam_pos,true,0,0,1,4,1,ph)
+			:add(relative_cam_pos,true,1,0,1,4,1,ph)
+			:add(relative_cam_pos,true,2,0,1,4,1,ph)
+
+		for i = 0,ph-1 do
+			local pt = p:row(i)
+
+			add(draw_queue,{
+				func = function()
+					pset(pt.x,pt.y,col)
+				end,
+				z = depths[i]
+			})
+		end
+	end
+
+	profile"Point queueing"
+end
 
 ---Queues a line for rendering.
 ---@param p1 userdata @The first point of the line.
@@ -530,6 +624,8 @@ return {
 	perspective_points = perspective_points,
 	in_frustum = in_frustum,
 	queue_model = queue_model,
+	queue_point = queue_point,
+	queue_points = queue_points,
 	queue_line = queue_line,
 	queue_billboard = queue_billboard,
 	draw_all = draw_all,
