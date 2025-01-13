@@ -17,19 +17,14 @@ end
 ---Applies perspective division to a matrix of points.
 local function perspective_points(pts)
 	local pts_height = pts:height()
-	-- Getting the reciprocals of a userdata is non-trivial. To do it, we
-	-- initialize an array, copy 1 to every element, and then divide that by w.
-	local inv_w = userdata("f64",pts_height)
-		:copy(1,true)
-		:div(pts,true,3,0,1,4,1,pts_height)
-	
-	-- inv_w serves two purposes. The first is so we can put the reciprocals
-	-- of w into the w column, and the second is that we can use the cheaper
-	-- multiplication for XYZ. Unfortunately, we can't do a single operation
-	-- which uses the same w three times, so we split it into XYZ.
-	return pts:mul(inv_w,true,0,0,1,1,4,pts_height) -- X
-		:mul(inv_w,true,0,1,1,1,4,pts_height) -- Y
-		:copy(inv_w,true,0,3,1,1,4,pts_height) -- W
+
+	-- Replace the w column with its reciprocals.
+	pts.div(1,pts,true,0,3,1,0,4,pts_height)
+
+    -- Unfortunately, we can't do a single operation which uses the same w
+    -- twice, so we split it into X and Y.
+	return pts:mul(pts,true,3,0,1,4,4,pts_height) -- X
+		:mul(pts,true,3,1,1,4,4,pts_height) -- Y
 end
 
 ---Applies perspective division to a single point.
