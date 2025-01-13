@@ -1,6 +1,7 @@
 --[[pod_format="raw",created="2024-05-22 18:18:28",modified="2024-11-06 08:29:04",revision=18461]]
 local Utils = require"blade3d.utils"
 local sort = Utils.tab_sort
+local quat = require"blade3d.quaternions"
 
 ---@class RenderCamera
 local camera
@@ -487,6 +488,42 @@ local function queue_line(p1,p2,col,mat)
 	})
 end
 
+local function queue_billboard(pt,material,ambience,light,light_intensity)
+	local relative_cam_pos = pt-camera.position
+	
+	pt = perspective_point(pt:matmul(camera:get_vp_matrix()))
+	
+	if pt.z > pt[3] or pt.z < -pt[3] then return end
+	
+	local depth = relative_cam_pos:dot(relative_cam_pos)
+	
+	local props = setmetatable({},material)
+	if light then
+		local light_mag = light:magnitude()+0.00001
+		local illuminance = light_intensity
+			and light_intensity/(light_mag*light_mag) -- Inverse square falloff
+			or light_mag
+		
+		local relative_dir = relative_cam_pos/-relative_cam_pos:magnitude()
+		
+		local lum = relative_dir:dot(light/light_mag)
+		props.light = (lum > 0 and lum or 0)
+			*illuminance
+			+ambience
+	elseif ambience then
+		props.light = ambience
+	end
+	
+	props.size *= pt[3]*camera.target:height()*0.5 --NDC spans -1 to 1.
+	pt:mul(camera.cts_mul,true,0,0,3)
+		:add(camera.cts_add,true,0,0,3)
+	
+	add(draw_queue,{
+		func = function() material.shader(props,pt) end,
+		z = depth
+	})
+end
+
 return {
 	set_camera = set_camera,
 	perspective_point = perspective_point,
@@ -494,5 +531,6 @@ return {
 	in_frustum = in_frustum,
 	queue_model = queue_model,
 	queue_line = queue_line,
+	queue_billboard = queue_billboard,
 	draw_all = draw_all,
 }
