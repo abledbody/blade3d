@@ -1,6 +1,15 @@
 local Transform = require"blade3d.transform"
 local quat = require"blade3d.quaternions"
 
+---@class RenderCamera
+local camera
+
+---Sets the camera to be used for rendering.
+---@param cam RenderCamera
+local function set_active(cam)
+	camera = cam
+end
+
 ---Creates a projection matrix.
 ---@param n number The depth of the near clipping plane.
 ---@param f number The depth of the far clipping plane.
@@ -150,6 +159,7 @@ end
 
 return {
 	new = new,
+	set_active = set_active,
 	project = project,
 	get_fov_slope = get_fov_slope,
 }

@@ -55,6 +55,16 @@ local function tab_sort(tab,key,descending)
 	end
 end
 
+---@param func function The function to call.
+---@param ... any The arguments to pass to the function.
+---@return function() A function which calls the given function with the given arguments.
+local function command(func,...)
+	local args = {...}
+	return function(...)
+		return func(...,unpack(args))
+	end
+end
+
 return {
 	ident_mat = ident_mat,
 	print_mat = print_mat,
@@ -64,4 +74,5 @@ return {
 	asin = asin,
 	acos = acos,
 	tab_sort = tab_sort,
+	command = command,
 }
