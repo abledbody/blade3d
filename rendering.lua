@@ -1,13 +1,39 @@
 --[[pod_format="raw",created="2024-05-22 18:18:28",modified="2024-11-06 08:29:04",revision=18461]]
 local Utils = require"blade3d.utils"
+local Camera = require"blade3d.camera"
 local sort = Utils.tab_sort
 
 local draw_queue = {}
 local model_queue = {}
 
+local function queue_draw_call(func,z)
+	add(draw_queue,{func = func,z = z})
+end
+
+---Applies perspective division to a matrix of points.
+local function perspective_points(pts)
+	local pts_height = pts:height()
+
+	-- Replace the w column with its reciprocals.
+	pts.div(1,pts,true,0,3,1,0,4,pts_height)
+
+    -- Unfortunately, we can't do a single operation which uses the same w
+    -- twice, so we split it into X and Y.
+	return pts:mul(pts,true,3,0,1,4,4,pts_height) -- X
+		:mul(pts,true,3,1,1,4,4,pts_height) -- Y
+end
+
+---Applies perspective division to a single point.
+local function perspective_point(pt)
+	local w = 1/pt[3]
+	pt = pt:mul(w,false,0,0,3)
+	pt[3] = w
+	return pt
+end
+
 ---Draws all render calls in the queue using the current camera.
 local function draw_all()
-	set_draw_target(camera.target)
+	set_draw_target(Camera.get_active().target)
 	
 	for pending in all(model_queue) do
 		pending()
@@ -45,18 +71,19 @@ local function queue_point(p,col,mat)
 	profile"Point queueing"
 	p = p:matmul(mat)
 	
-	local relative_cam_pos = p-camera.position
+	local cam = Camera.get_active()
+	local relative_cam_pos = p-cam.position
 	local depth = relative_cam_pos:dot(relative_cam_pos)
 	
-	p = p:matmul(camera:get_vp_matrix())
+	p = p:matmul(cam:get_vp_matrix())
 	
 	if	   p.z >  p[3]
 		or p.z < -p[3]
 	then return end
 
 	p = perspective_point(p)
-		:mul(camera.cts_mul,true,0,0,3)
-		:add(camera.cts_add,true,0,0,3),
+		:mul(cam.cts_mul,true,0,0,3)
+		:add(cam.cts_add,true,0,0,3),
 	
 	add(draw_queue,{
 		func = function() pset(p.x,p.y,col) end,
@@ -76,7 +103,8 @@ local function queue_points(pts,col,mat,midpoint)
 	local ph = pmodel:height()
 	local depth = 1
 	
-	local p = pmodel:matmul(camera:get_vp_matrix())
+	local cam = Camera.get_active()
+	local p = pmodel:matmul(cam:get_vp_matrix())
 	
 	profile"Frustum tests"
 	for i = 0, ph-1 do
@@ -92,11 +120,11 @@ local function queue_points(pts,col,mat,midpoint)
 	profile"Frustum tests"
 
 	p = perspective_points(p:copy(p))
-		:mul(camera.cts_mul,true,0,0,3,0,4,ph)
-		:add(camera.cts_add,true,0,0,3,0,4,ph)
+		:mul(cam.cts_mul,true,0,0,3,0,4,ph)
+		:add(cam.cts_add,true,0,0,3,0,4,ph)
 
 	if midpoint then
-		local relative_cam_pos = midpoint-camera.position
+		local relative_cam_pos = midpoint-cam.position
 		depth = relative_cam_pos:dot(relative_cam_pos)
 
 		local draws = userdata("f64",3,ph)
@@ -110,7 +138,7 @@ local function queue_points(pts,col,mat,midpoint)
 			z = depth
 		})
 	else
-		local relative_cam_pos = pmodel:sub(camera.position,false,0,0,3,0,4,ph)
+		local relative_cam_pos = pmodel:sub(cam.position,false,0,0,3,0,4,ph)
 		relative_cam_pos:mul(relative_cam_pos,true,0,0,3,4,4,ph)
 		local depths = userdata("f64",ph) -- Sum of squares
 			:copy(relative_cam_pos,true,0,0,1,4,1,ph)
@@ -140,10 +168,11 @@ end
 local function queue_line(p1,p2,col,mat)
 	p1,p2 = p1:matmul(mat),p2:matmul(mat)
 	
-	local relative_cam_pos = (p1+p2)*0.5-camera.position
+	local cam = Camera.get_active()
+	local relative_cam_pos = (p1+p2)*0.5-cam.position
 	local depth = relative_cam_pos:dot(relative_cam_pos)
 	
-	local vp = camera:get_vp_matrix()
+	local vp = cam:get_vp_matrix()
 	p1,p2 = p1:matmul(vp),p2:matmul(vp)
 	
 	if	   p1.z >  p1[3] and p2.z >  p2[3]
@@ -166,11 +195,11 @@ local function queue_line(p1,p2,col,mat)
 
 	p1,p2 =
 		perspective_point(p1)
-			:mul(camera.cts_mul,true,0,0,3)
-			:add(camera.cts_add,true,0,0,3),
+			:mul(cam.cts_mul,true,0,0,3)
+			:add(cam.cts_add,true,0,0,3),
 		perspective_point(p2)
-			:mul(camera.cts_mul,true,0,0,3)
-			:add(camera.cts_add,true,0,0,3)
+			:mul(cam.cts_mul,true,0,0,3)
+			:add(cam.cts_add,true,0,0,3)
 	
 	add(draw_queue,{
 		func = function() line(p1.x,p1.y,p2.x,p2.y,col) end,
@@ -179,9 +208,10 @@ local function queue_line(p1,p2,col,mat)
 end
 
 local function queue_billboard(pt,material,ambience,light,light_intensity)
-	local relative_cam_pos = pt-camera.position
+	local cam = Camera.get_active()
+	local relative_cam_pos = pt-cam.position
 	
-	pt = perspective_point(pt:matmul(camera:get_vp_matrix()))
+	pt = perspective_point(pt:matmul(cam:get_vp_matrix()))
 	
 	if pt.z > pt[3] or pt.z < -pt[3] then return end
 	
@@ -204,9 +234,9 @@ local function queue_billboard(pt,material,ambience,light,light_intensity)
 		props.light = ambience
 	end
 	
-	props.size *= pt[3]*camera.target:height()*0.5 --NDC spans -1 to 1.
-	pt:mul(camera.cts_mul,true,0,0,3)
-		:add(camera.cts_add,true,0,0,3)
+	props.size *= pt[3]*cam.target:height()*0.5 --NDC spans -1 to 1.
+	pt:mul(cam.cts_mul,true,0,0,3)
+		:add(cam.cts_add,true,0,0,3)
 	
 	add(draw_queue,{
 		func = function() material.shader(props,pt) end,
@@ -220,5 +250,8 @@ return {
 	queue_points = queue_points,
 	queue_line = queue_line,
 	queue_billboard = queue_billboard,
+	queue_draw_call = queue_draw_call,
 	draw_all = draw_all,
+	perspective_points = perspective_points,
+	perspective_point = perspective_point,
 }

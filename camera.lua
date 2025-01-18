@@ -2,12 +2,16 @@ local Transform = require"blade3d.transform"
 local quat = require"blade3d.quaternions"
 
 ---@class RenderCamera
-local camera
+local active
 
 ---Sets the camera to be used for rendering.
 ---@param cam RenderCamera
 local function set_active(cam)
-	camera = cam
+	active = cam
+end
+
+local function get_active()
+	return active
 end
 
 ---Creates a projection matrix.
@@ -160,6 +164,7 @@ end
 return {
 	new = new,
 	set_active = set_active,
+	get_active = get_active,
 	project = project,
 	get_fov_slope = get_fov_slope,
 }

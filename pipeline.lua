@@ -1,25 +1,8 @@
 local Culling = require"blade3d.culling"
-
----Applies perspective division to a matrix of points.
-local function perspective_points(pts)
-	local pts_height = pts:height()
-
-	-- Replace the w column with its reciprocals.
-	pts.div(1,pts,true,0,3,1,0,4,pts_height)
-
-    -- Unfortunately, we can't do a single operation which uses the same w
-    -- twice, so we split it into X and Y.
-	return pts:mul(pts,true,3,0,1,4,4,pts_height) -- X
-		:mul(pts,true,3,1,1,4,4,pts_height) -- Y
-end
-
----Applies perspective division to a single point.
-local function perspective_point(pt)
-	local w = 1/pt[3]
-	pt = pt:mul(w,false,0,0,3)
-	pt[3] = w
-	return pt
-end
+local Camera = require"blade3d.camera"
+local Rendering = require"blade3d.rendering"
+local perspective_points,perspective_point =
+	Rendering.perspective_points,Rendering.perspective_point
 
 local function point_depths(sorting_points,relative_cam_pos)
 	profile"Depth determination"
@@ -102,7 +85,7 @@ local function clip_to_screen(pts,cam)
 		:add(cam.cts_add,true,0,0,3,0,4,pts:height())
 end
 
-local function draw_model(model,screen_height,cam)
+local function draw_model(model,screen_height)
 	local pts,uvs,indices,skip_tris,materials,depths,lums =
 			model.pts,model.uvs,model.indices,
 			model.skip_tris,model.materials,model.depths,
@@ -121,22 +104,23 @@ local function draw_model(model,screen_height,cam)
 			local material = materials[j]
 			local props_in = setmetatable({light = lums and lums[j]},material)
 			
-			add(draw_queue,{
-				func = function()
+			Rendering.queue_draw_call(
+				function()
 					material.shader(props_in,vert_data,screen_height)
 				end,
-				z = depths[j]
-			})
+				depths[j]
+			)
 		end
 	end
 	profile"Model iteration"
 end
 
-local function standard(model,mat,imat,cam,light,ambience,light_intensity)
+local function standard(ambience,light,light_intensity,model,mat,imat)
+	local cam = Camera.get_active()
 	local cull_center = model.cull_center
 	if not in_frustum(cull_center,model.cull_radius,mat,cam) then return end
 
-	local norms,relative_cam_pos = model.norms,cam:matmul3d(imat)
+	local norms,relative_cam_pos = model.norms,cam.position:matmul3d(imat)
 
 	model.skip_tris = Culling.backfaces(norms,model.face_dists,relative_cam_pos)
 
@@ -149,12 +133,12 @@ local function standard(model,mat,imat,cam,light,ambience,light_intensity)
 	model.pts = perspective_points(model.pts)
 	clip_to_screen(model.pts,cam)
 	
-	draw_model(model,cam.target:height(),cam)
-
+	draw_model(model,cam.target:height())
+	if (not clipped) then return end
 	clipped.pts = perspective_points(clipped.pts)
 	clip_to_screen(clipped.pts,cam)
 
-	draw_model(clipped,cam.target:height(),cam)
+	draw_model(clipped,cam.target:height())
 end
 
 return {
