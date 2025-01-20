@@ -11,11 +11,13 @@ local function queue_draw_call(func,z)
 end
 
 ---Applies perspective division to a matrix of points.
-local function perspective_points(pts)
+---@param pts userdata @4xN userdata of point coordinates.
+---@param mutate boolean @Whether to mutate the input points.
+local function perspective_points(pts,mutate)
 	local pts_height = pts:height()
 
 	-- Replace the w column with its reciprocals.
-	pts.div(1,pts,true,0,3,1,0,4,pts_height)
+	pts.div(1,pts,mutate,0,3,1,0,4,pts_height)
 
     -- Unfortunately, we can't do a single operation which uses the same w
     -- twice, so we split it into X and Y.
@@ -24,9 +26,11 @@ local function perspective_points(pts)
 end
 
 ---Applies perspective division to a single point.
-local function perspective_point(pt)
+---@param pt userdata @The point to apply perspective division to.
+---@param mutate boolean @Whether to mutate the input point.
+local function perspective_point(pt,mutate)
 	local w = 1/pt[3]
-	pt = pt:mul(w,false,0,0,3)
+	pt = pt:mul(w,mutate,0,0,2)
 	pt[3] = w
 	return pt
 end
@@ -35,9 +39,11 @@ end
 local function draw_all()
 	set_draw_target(Camera.get_active().target)
 	
+	profile"Pipeline"
 	for pending in all(model_queue) do
 		pending()
 	end
+	profile"Pipeline"
     
 	profile"Z-sorting"
 	local sorted = sort(draw_queue,"z",true)
@@ -81,9 +87,9 @@ local function queue_point(p,col,mat)
 		or p.z < -p[3]
 	then return end
 
-	p = perspective_point(p)
+	p = perspective_point(p,true)
 		:mul(cam.cts_mul,true,0,0,3)
-		:add(cam.cts_add,true,0,0,3),
+		:add(cam.cts_add,true,0,0,3)
 	
 	add(draw_queue,{
 		func = function() pset(p.x,p.y,col) end,
@@ -119,7 +125,7 @@ local function queue_points(pts,col,mat,midpoint)
 	end	
 	profile"Frustum tests"
 
-	p = perspective_points(p:copy(p))
+	p = perspective_points(p:copy(p),true)
 		:mul(cam.cts_mul,true,0,0,3,0,4,ph)
 		:add(cam.cts_add,true,0,0,3,0,4,ph)
 
@@ -194,10 +200,10 @@ local function queue_line(p1,p2,col,mat)
 	end
 
 	p1,p2 =
-		perspective_point(p1)
+		perspective_point(p1,true)
 			:mul(cam.cts_mul,true,0,0,3)
 			:add(cam.cts_add,true,0,0,3),
-		perspective_point(p2)
+		perspective_point(p2,true)
 			:mul(cam.cts_mul,true,0,0,3)
 			:add(cam.cts_add,true,0,0,3)
 	
@@ -211,7 +217,7 @@ local function queue_billboard(pt,material,ambience,light,light_intensity)
 	local cam = Camera.get_active()
 	local relative_cam_pos = pt-cam.position
 	
-	pt = perspective_point(pt:matmul(cam:get_vp_matrix()))
+	pt = perspective_point(pt:matmul(cam:get_vp_matrix()),false)
 	
 	if pt.z > pt[3] or pt.z < -pt[3] then return end
 	

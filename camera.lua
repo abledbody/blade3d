@@ -42,6 +42,10 @@ local function get_fov_slope(fov_degrees)
 	return -sin(fov_angle)/cos(fov_angle)
 end
 
+---@param fov_slope number The slope of the field of view.
+---@param aspect_ratio number The aspect ratio of the screen, as width/height.
+---@return userdata @The normal of the left frustum plane.
+---@return userdata @The normal of the top frustum plane.
 local function get_frustum_normals(fov_slope,aspect_ratio)
 	local frust_norm_x = vec(fov_slope,-1)
 	local frust_norm_y = frust_norm_x:mul(aspect_ratio,false,0,0,1)

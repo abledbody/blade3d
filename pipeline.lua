@@ -1,8 +1,13 @@
 local Culling = require"blade3d.culling"
+local backface_cull,frustum_cull = Culling.backfaces,Culling.frustum
 local Camera = require"blade3d.camera"
 local Rendering = require"blade3d.rendering"
-local perspective_points,perspective_point =
-	Rendering.perspective_points,Rendering.perspective_point
+local perspective_points,
+	perspective_point,
+	queue_draw_call =
+	Rendering.perspective_points,
+	Rendering.perspective_point,
+	Rendering.queue_draw_call
 
 local function point_depths(sorting_points,relative_cam_pos)
 	profile"Depth determination"
@@ -57,14 +62,16 @@ local function light_model(norms,imat,ambience,light,light_intensity)
 	return lums
 end
 
----@param model table @The model to check.
+---@param cull_center userdata @The center of the model's bounding sphere.
+---@param cull_radius number @The radius of the model's bounding sphere.
 ---@param mat userdata @The model's transformation matrix.
+---@param cam RenderCamera @The camera to check the frustum of.
 ---@return boolean @Whether the model intersects the frustum.
 local function in_frustum(cull_center,cull_radius,mat,cam)
 	profile"Model frustum culling"
 	-- If we transform the cull center into camera space, the frustum
 	-- becomes less mathematically complex to deal with.
-	local cull_center = cull_center:matmul3d(
+	cull_center = cull_center:matmul3d(
 		mat:matmul3d(cam:get_view_matrix())
 	)
 	local depth = -cull_center.z
@@ -80,8 +87,12 @@ local function in_frustum(cull_center,cull_radius,mat,cam)
 	return inside
 end
 
-local function clip_to_screen(pts,cam)
-	pts:mul(cam.cts_mul,true,0,0,3,0,4,pts:height())
+---@param pts userdata @The model's points.
+---@param cam RenderCamera @The camera to use.
+---@param mutate boolean @Whether to mutate the input points.
+---@return userdata
+local function clip_to_screen(pts,cam,mutate)
+	return pts:mul(cam.cts_mul,mutate,0,0,3,0,4,pts:height())
 		:add(cam.cts_add,true,0,0,3,0,4,pts:height())
 end
 
@@ -104,7 +115,7 @@ local function draw_model(model,screen_height)
 			local material = materials[j]
 			local props_in = setmetatable({light = lums and lums[j]},material)
 			
-			Rendering.queue_draw_call(
+			queue_draw_call(
 				function()
 					material.shader(props_in,vert_data,screen_height)
 				end,
@@ -122,21 +133,23 @@ local function standard(ambience,light,light_intensity,model,mat,imat)
 
 	local norms,relative_cam_pos = model.norms,cam.position:matmul3d(imat)
 
-	model.skip_tris = Culling.backfaces(norms,model.face_dists,relative_cam_pos)
+	model.skip_tris = backface_cull(norms,model.face_dists,relative_cam_pos)
 
 	model.pts = model.pts:matmul(mat:matmul(cam:get_vp_matrix()))
 	model.depths = point_depths(model.sorting_points,relative_cam_pos)
 	model.lums = light_model(norms,imat,ambience,light,light_intensity)
 	
-	local clipped = Culling.frustum(model)
+	local clipped = frustum_cull(model)
 
-	model.pts = perspective_points(model.pts)
-	clip_to_screen(model.pts,cam)
+	perspective_points(model.pts,true)
+	clip_to_screen(model.pts,cam,true)
 	
 	draw_model(model,cam.target:height())
+	
 	if (not clipped) then return end
-	clipped.pts = perspective_points(clipped.pts)
-	clip_to_screen(clipped.pts,cam)
+
+	perspective_points(clipped.pts,true)
+	clip_to_screen(clipped.pts,cam,true)
 
 	draw_model(clipped,cam.target:height())
 end

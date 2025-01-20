@@ -2,6 +2,7 @@
 ---and clips triangles that intersect the near plane.
 ---@return table? @A new model containing every clipped triangle.
 local function frustum(model)
+	profile"Frustum checks"
 	local pts,uvs,indices,
 		skip_tris,materials,depths,lums =
 			model.pts,model.uvs,model.indices,
@@ -89,7 +90,10 @@ local function frustum(model)
 	-- We know ahead of time how many triangles we need to generate, so these
 	-- arrays can be made with a fixed size.
 	local gen_tri_count = #tri_clips+#quad_clips*2
-	if gen_tri_count == 0 then return end
+	if gen_tri_count == 0 then 
+		profile"Frustum checks"
+		return
+	end
 	
 	local gen_vert_count = #tri_clips*3+#quad_clips*4
 	
@@ -209,6 +213,7 @@ local function frustum(model)
 		tri_i += 2
 	end
 	
+	profile"Frustum checks"
 	return {
 		pts = gen_pts,
 		uvs = gen_uvs,
