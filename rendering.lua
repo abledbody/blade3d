@@ -274,6 +274,8 @@ local function draw_model(model,cts_mul,cts_add,screen_height)
 	local unpacked_verts = userdata("f64",6,#indices)
 	pts:copy(indices,unpacked_verts,0,0,4,1,6,#indices)
 	unpacked_verts:copy(uvs,true,0,4,2,2,6,uvs:height())
+	unpacked_verts:mul(unpacked_verts,true,3,4,1,6,6,#indices)
+		:mul(unpacked_verts,true,3,5,1,6,6,#indices)
 	
 	for j = 0,indices:height()-1 do
 		if skip_tris[j] <= 0 then
