@@ -1,6 +1,8 @@
 local Transform = require"blade3d.transform"
 local quat = require"blade3d.quaternions"
 
+local tan,pi = math.tan,math.pi
+
 ---Creates a projection matrix.
 ---@param n number The depth of the near clipping plane.
 ---@param f number The depth of the far clipping plane.
@@ -13,10 +15,10 @@ local function project(n,f,s,a)
 	-- Note: blade3d uses reverse depth, which means that the near plane is at
 	-- 0, and the far plane is at 1.
 	mat:set(0,0,
-		  s,  0,  0, 0,
-		  0,s*a,  0, 0,
-		  0,  0,1/d,-1,
-		  0,  0,n/d, 0
+		  1/s,  0,  0, 0,
+		    0,a/s,  0, 0,
+		    0,  0,1/d,-1,
+		    0,  0,n/d, 0
 	)
 	return mat
 end
@@ -25,15 +27,23 @@ end
 ---@param fov_degrees number The field of view in degrees.
 ---@return number @The slope of the field of view.
 local function get_fov_slope(fov_degrees)
-	local fov_angle = (0.5-fov_degrees/360)*0.5
-	return -sin(fov_angle)/cos(fov_angle)
+	local fov_angle = fov_degrees/360*pi
+	return tan(fov_angle)
 end
 
+---Calculates the normals of the frustum planes based on the field of view slope and aspect ratio.
+---@param fov_slope number The slope of the field of view.
+---@param aspect_ratio number The aspect ratio of the display target.
+---@return userdata,userdata @The normals of the left and top frustum planes.
 local function get_frustum_normals(fov_slope,aspect_ratio)
 	local frust_norm_x = vec(fov_slope,-1)
 	local frust_norm_y = frust_norm_x:mul(aspect_ratio,false,0,0,1)
+	---@diagnostic disable-next-line: cast-local-type
 	frust_norm_x /= frust_norm_x:magnitude()
+	---@diagnostic disable-next-line: cast-local-type
 	frust_norm_y /= frust_norm_y:magnitude()
+	---@cast frust_norm_x userdata
+	---@cast frust_norm_y userdata
 	return frust_norm_x,frust_norm_y
 end
 
