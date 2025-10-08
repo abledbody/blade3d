@@ -36,8 +36,8 @@ end
 ---@param aspect_ratio number The aspect ratio of the display target.
 ---@return userdata,userdata @The normals of the left and top frustum planes.
 local function get_frustum_normals(fov_slope,aspect_ratio)
-	local frust_norm_x = vec(fov_slope,-1)
-	local frust_norm_y = frust_norm_x:mul(aspect_ratio,false,0,0,1)
+	local frust_norm_x = vec(1,fov_slope)
+	local frust_norm_y = vec(1,fov_slope/aspect_ratio)
 	---@diagnostic disable-next-line: cast-local-type
 	frust_norm_x /= frust_norm_x:magnitude()
 	---@diagnostic disable-next-line: cast-local-type

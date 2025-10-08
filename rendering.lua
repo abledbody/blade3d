@@ -350,8 +350,8 @@ local function in_frustum(model,mat)
 		and depth < camera.far_plane+cull_radius
 		-- To determine the distance from the sides, we need to use the
 		-- scalar rejection from the frustum planes.
-		and vec(abs(cull_center.x),depth):dot(camera.frust_norm_x) < cull_radius
-		and vec(abs(cull_center.y),depth):dot(camera.frust_norm_y) < cull_radius
+		and vec(abs(cull_center.x),depth):dot(camera.frust_norm_x) > -cull_radius
+		and vec(abs(cull_center.y),depth):dot(camera.frust_norm_y) > -cull_radius
 	profile"Model frustum culling"
 	return inside
 end
